@@ -636,6 +636,9 @@ def index() -> str:
           <div class="row">
             <input id="search" class="input" placeholder="Search filenames or full text…" />
           </div>
+          <div class="row" style="margin-top:8px;">
+            <input id="currentFile" class="input" readonly placeholder="Current file: none selected" />
+          </div>
           <div class="dropzone" id="dropzone" title="Drop a PATH string here (e.g. /abs/path/to/docs)">
             <div style="font-weight:700;">Drop a folder path here</div>
             <div class="hint">Drag a path as text (from terminal / address bar), or paste below.</div>
@@ -676,6 +679,7 @@ def index() -> str:
   const contentEl = document.getElementById('content');
   const searchEl = document.getElementById('search');
   const clearBtn = document.getElementById('clearSearch');
+  const currentFileEl = document.getElementById('currentFile');
 
   const themeEl = document.getElementById('theme');
   const dropzone = document.getElementById('dropzone');
@@ -695,6 +699,15 @@ def index() -> str:
 
   let TREE = null;
   let CURRENT_PATH = null;
+
+  function isSearchActive() {{
+    return !!searchEl.value.trim();
+  }}
+
+  function updateCurrentFileField(path) {{
+    const p = (path || "").trim();
+    currentFileEl.value = p ? p : "None selected";
+  }}
 
   function escapeHtml(s) {{
     return s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -741,14 +754,19 @@ def index() -> str:
   async function loadTree() {{
     const res = await fetch('/api/tree');
     TREE = await res.json();
-    const files = flattenFiles(TREE);
-    renderFileList(files);
+    if (isSearchActive()) {{
+      await doSearch(searchEl.value);
+      return;
+    }}
+    renderFileList(flattenFiles(TREE));
   }}
 
   async function loadFile(path) {{
     CURRENT_PATH = path;
-    const files = flattenFiles(TREE);
-    renderFileList(files);
+    updateCurrentFileField(path);
+    if (!isSearchActive()) {{
+      renderFileList(flattenFiles(TREE));
+    }}
 
     const res = await fetch('/api/file?path=' + encodeURIComponent(path));
     if (!res.ok) {{
@@ -900,6 +918,7 @@ def index() -> str:
       if (ev.data === 'root_changed') {{
         loadTree().then(() => {{
           CURRENT_PATH = null;
+          updateCurrentFileField("");
           contentEl.innerHTML = `<h1>Docs Viewer</h1><p class="hint">Docs folder changed. Select a file.</p>`;
         }});
       }}
@@ -963,6 +982,7 @@ def index() -> str:
 
   // Initial boot
   (async () => {{
+    updateCurrentFileField("");
     const savedRoot = localStorage.getItem('docs_root');
     if (savedRoot) {{
       rootPathEl.value = savedRoot;
