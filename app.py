@@ -526,10 +526,100 @@ def index() -> str:
       min-height: 0;
     }}
 
+    .mainShell {{
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      padding: 16px 6px 80px 16px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 12px;
+    }}
+
     .content {{
       max-width: 980px;
-      margin: 0 auto;
-      padding: 20px 26px 80px 26px;
+      padding: 4px 10px 0 10px;
+      min-width: 0;
+    }}
+
+    .tocPanel {{
+      width: 290px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel);
+      position: sticky;
+      top: 12px;
+      right: 6px;
+      max-height: calc(100vh - 24px);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: width 150ms ease;
+    }}
+    .tocPanel.collapsed {{
+      width: auto;
+      border-color: transparent;
+      background: transparent;
+    }}
+    .tocHeader {{
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+    }}
+    .tocPanel.collapsed .tocHeader {{
+      border-bottom: none;
+      padding: 0;
+    }}
+    .tocToggle {{
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--fg);
+      border-radius: 10px;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+    .tocBody {{
+      padding: 8px 8px 10px 8px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }}
+    .tocPanel.collapsed .tocBody {{
+      display: none;
+    }}
+    .tocTitle {{
+      padding: 6px 8px 4px 8px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: var(--muted);
+      font-weight: 700;
+    }}
+    .tocLink {{
+      display: block;
+      padding: 6px 8px;
+      border-radius: 8px;
+      color: var(--fg);
+      text-decoration: none;
+      font-size: 13px;
+      line-height: 1.35;
+    }}
+    .tocLink:hover {{
+      background: rgba(0,0,0,0.04);
+      text-decoration: none;
+    }}
+    [data-theme="dark"] .tocLink:hover,
+    [data-theme="nord"] .tocLink:hover {{
+      background: rgba(255,255,255,0.06);
+    }}
+    .tocLink.level3 {{
+      padding-left: 20px;
+      color: var(--muted);
     }}
 
     .hint {{
@@ -684,6 +774,18 @@ def index() -> str:
     @media (max-width: 900px) {{
       .app {{ grid-template-columns: 1fr; }}
       .sidebar {{ height: 50vh; }}
+      .mainShell {{
+        grid-template-columns: 1fr;
+        padding: 10px 10px 70px 10px;
+      }}
+      .tocPanel {{
+        width: 100%;
+        max-height: 45vh;
+        position: static;
+      }}
+      .tocPanel.collapsed {{
+        width: 100%;
+      }}
     }}
   </style>
 </head>
@@ -725,11 +827,23 @@ def index() -> str:
     </div>
 
     <div class="main">
-      <div class="content" id="content">
-        <h1>Docs Viewer</h1>
-        <p class="hint">
-          Set your docs folder (server-side), then click a file — or search full text.
-        </p>
+      <div class="mainShell">
+        <div class="content" id="content">
+          <h1>Docs Viewer</h1>
+          <p class="hint">
+            Set your docs folder (server-side), then click a file — or search full text.
+          </p>
+        </div>
+        <aside class="tocPanel collapsed" id="tocPanel">
+          <div class="tocHeader">
+            <button id="tocToggle" class="tocToggle" type="button" aria-expanded="false">Show TOC</button>
+          </div>
+          <div class="tocBody" id="tocBody">
+            <div class="tocTitle">On this page</div>
+            <div class="hint" id="tocEmpty">No sections</div>
+            <nav id="tocList"></nav>
+          </div>
+        </aside>
       </div>
     </div>
   </div>
@@ -746,6 +860,10 @@ def index() -> str:
   const rootPathEl = document.getElementById('rootPath');
   const setRootBtn = document.getElementById('setRoot');
   const rootStatusEl = document.getElementById('rootStatus');
+  const tocPanelEl = document.getElementById('tocPanel');
+  const tocToggleEl = document.getElementById('tocToggle');
+  const tocListEl = document.getElementById('tocList');
+  const tocEmptyEl = document.getElementById('tocEmpty');
 
   // Persist theme
   const savedTheme = localStorage.getItem('docs_theme') || 'light';
@@ -760,6 +878,7 @@ def index() -> str:
   let TREE = null;
   let CURRENT_PATH = null;
   const expandedDirs = new Set();
+  let tocCollapsed = true;
 
   function isSearchActive() {{
     return !!searchEl.value.trim();
@@ -768,6 +887,56 @@ def index() -> str:
   function updateCurrentFileField(path) {{
     const p = (path || "").trim();
     currentFileEl.value = p ? p : "None selected";
+  }}
+
+  function setTocCollapsed(next) {{
+    tocCollapsed = !!next;
+    tocPanelEl.classList.toggle('collapsed', tocCollapsed);
+    tocToggleEl.setAttribute('aria-expanded', tocCollapsed ? 'false' : 'true');
+    tocToggleEl.textContent = tocCollapsed ? 'Show TOC' : 'Hide TOC';
+    localStorage.setItem('docs_toc_collapsed', tocCollapsed ? '1' : '0');
+  }}
+
+  function slugifyHeading(text) {{
+    return (text || "")
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9\\s-]/g, "")
+      .replace(/\\s+/g, "-")
+      .replace(/-+/g, "-");
+  }}
+
+  function renderTOC() {{
+    tocListEl.innerHTML = "";
+    const headings = Array.from(contentEl.querySelectorAll('h2, h3'));
+    if (!headings.length) {{
+      tocEmptyEl.style.display = "block";
+      return;
+    }}
+    tocEmptyEl.style.display = "none";
+
+    const seen = new Set();
+    headings.forEach((heading, idx) => {{
+      const base = slugifyHeading(heading.textContent) || `section-${{idx + 1}}`;
+      let id = base;
+      let count = 2;
+      while (seen.has(id)) {{
+        id = `${{base}}-${{count}}`;
+        count += 1;
+      }}
+      seen.add(id);
+      heading.id = id;
+
+      const a = document.createElement('a');
+      a.className = 'tocLink ' + (heading.tagName === 'H3' ? 'level3' : 'level2');
+      a.href = `#${{id}}`;
+      a.textContent = heading.textContent || id;
+      a.onclick = (e) => {{
+        e.preventDefault();
+        heading.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+      }};
+      tocListEl.appendChild(a);
+    }});
   }}
 
   function escapeHtml(s) {{
@@ -869,11 +1038,13 @@ def index() -> str:
     const res = await fetch('/api/file?path=' + encodeURIComponent(path));
     if (!res.ok) {{
       contentEl.innerHTML = `<p class="hint">Failed to load file: <code>${{escapeHtml(path)}}</code></p>`;
+      renderTOC();
       return;
     }}
     const data = await res.json();
     document.title = data.title ? (data.title + " — Docs Viewer") : "Docs Viewer";
     contentEl.innerHTML = data.html;
+    renderTOC();
     localStorage.setItem('docs_last_path', path);
   }}
 
@@ -1001,6 +1172,7 @@ def index() -> str:
     searchEl.value = "";
     await loadTree();
   }});
+  tocToggleEl.addEventListener('click', () => setTocCollapsed(!tocCollapsed));
 
   // Live reload via websocket
   function connectWS() {{
@@ -1018,6 +1190,7 @@ def index() -> str:
           CURRENT_PATH = null;
           updateCurrentFileField("");
           contentEl.innerHTML = `<h1>Docs Viewer</h1><p class="hint">Docs folder changed. Select a file.</p>`;
+          renderTOC();
         }});
       }}
     }};
@@ -1081,7 +1254,9 @@ def index() -> str:
   // Initial boot
   (async () => {{
     loadExpandedDirs();
+    setTocCollapsed(localStorage.getItem('docs_toc_collapsed') !== '0');
     updateCurrentFileField("");
+    renderTOC();
     const savedRoot = localStorage.getItem('docs_root');
     if (savedRoot) {{
       rootPathEl.value = savedRoot;
