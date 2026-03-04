@@ -451,6 +451,66 @@ def index() -> str:
 
     .node.selected {{ background: var(--selected); }}
 
+    .dirNode {{
+      margin: 2px 0;
+    }}
+
+    .dirSummary {{
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 8px;
+      border-radius: 10px;
+      font-weight: 700;
+    }}
+    .dirSummary:hover {{ background: rgba(0,0,0,0.04); }}
+    [data-theme="dark"] .dirSummary:hover,
+    [data-theme="nord"] .dirSummary:hover {{ background: rgba(255,255,255,0.06); }}
+    .dirSummary::-webkit-details-marker {{ display: none; }}
+    .dirSummary::before {{
+      content: "▸";
+      color: var(--muted);
+      transition: transform 120ms ease;
+      width: 12px;
+      display: inline-block;
+      text-align: center;
+    }}
+    .dirNode[open] > .dirSummary::before {{ transform: rotate(90deg); }}
+    .folderIcon::before {{ content: "📁"; }}
+    .dirNode[open] > .dirSummary .folderIcon::before {{ content: "📂"; }}
+
+    .dirChildren {{
+      margin-left: 10px;
+      padding-left: 8px;
+      border-left: 1px dashed var(--border);
+    }}
+
+    .treeFile {{
+      cursor: pointer;
+      user-select: none;
+      border-radius: 10px;
+      padding: 8px 10px;
+      margin: 2px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }}
+    .treeFile:hover {{ background: rgba(0,0,0,0.04); }}
+    [data-theme="dark"] .treeFile:hover,
+    [data-theme="nord"] .treeFile:hover {{ background: rgba(255,255,255,0.06); }}
+    .treeFile.selected {{ background: var(--selected); }}
+    .fileIcon::before {{ content: "📄"; }}
+    .treeIcon {{
+      width: 18px;
+      display: inline-flex;
+      justify-content: center;
+      flex: 0 0 18px;
+    }}
+
     .path {{
       font-size: 12px;
       color: var(--muted);
@@ -699,6 +759,7 @@ def index() -> str:
 
   let TREE = null;
   let CURRENT_PATH = null;
+  const expandedDirs = new Set();
 
   function isSearchActive() {{
     return !!searchEl.value.trim();
@@ -713,41 +774,78 @@ def index() -> str:
     return s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   }}
 
-  function flattenFiles(node) {{
-    let out = [];
-    if (!node) return out;
-    if (node.type === 'file') {{
-      out.push({{
-        name: node.name,
-        path: node.path,
-        display: node.path
-      }});
-      return out;
-    }}
-    for (const ch of (node.children || [])) {{
-      out = out.concat(flattenFiles(ch));
-    }}
-    return out;
+  function loadExpandedDirs() {{
+    try {{
+      const raw = localStorage.getItem('docs_expanded_dirs');
+      const arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr)) {{
+        for (const p of arr) {{
+          if (typeof p === "string" && p) expandedDirs.add(p);
+        }}
+      }}
+    }} catch (_err) {{}}
   }}
 
-  function renderFileList(files) {{
-    treeEl.innerHTML = "";
-    if (!files || files.length === 0) {{
-      treeEl.innerHTML = '<div class="hint" style="padding:12px">No files.</div>';
-      return;
-    }}
-    for (const f of files) {{
+  function saveExpandedDirs() {{
+    localStorage.setItem('docs_expanded_dirs', JSON.stringify(Array.from(expandedDirs)));
+  }}
+
+  function renderTreeNode(node, parentPath = "", depth = 0) {{
+    if (!node) return null;
+
+    if (node.type === 'file') {{
       const div = document.createElement('div');
-      div.className = 'node' + (f.path === CURRENT_PATH ? ' selected' : '');
+      div.className = 'treeFile' + (node.path === CURRENT_PATH ? ' selected' : '');
+      div.style.marginLeft = `${{depth * 10}}px`;
       div.innerHTML = `
         <div style="min-width:0">
-          <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${{escapeHtml(f.name)}}</div>
-          <div class="path">${{escapeHtml(f.display)}}</div>
+          <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center; gap:6px;">
+            <span class="treeIcon fileIcon" aria-hidden="true"></span>
+            <span>${{escapeHtml(node.name)}}</span>
+          </div>
+          <div class="path">${{escapeHtml(node.path)}}</div>
         </div>
         <div class="hint">md</div>
       `;
-      div.onclick = () => loadFile(f.path);
-      treeEl.appendChild(div);
+      div.onclick = () => loadFile(node.path);
+      return div;
+    }}
+
+    const dirRelPath = parentPath ? `${{parentPath}}/${{node.name}}` : node.name;
+    const details = document.createElement('details');
+    details.className = "dirNode";
+    details.style.marginLeft = `${{depth * 10}}px`;
+    details.open = expandedDirs.has(dirRelPath);
+    details.addEventListener('toggle', () => {{
+      if (details.open) expandedDirs.add(dirRelPath);
+      else expandedDirs.delete(dirRelPath);
+      saveExpandedDirs();
+    }});
+
+    const summary = document.createElement('summary');
+    summary.className = "dirSummary";
+    summary.innerHTML = `<span class="treeIcon folderIcon" aria-hidden="true"></span><span>${{escapeHtml(node.name)}}</span>`;
+    details.appendChild(summary);
+
+    const childrenWrap = document.createElement('div');
+    childrenWrap.className = "dirChildren";
+    for (const child of (node.children || [])) {{
+      const childEl = renderTreeNode(child, dirRelPath, depth + 1);
+      if (childEl) childrenWrap.appendChild(childEl);
+    }}
+    details.appendChild(childrenWrap);
+    return details;
+  }}
+
+  function renderFileList(tree) {{
+    treeEl.innerHTML = "";
+    if (!tree || !tree.children || tree.children.length === 0) {{
+      treeEl.innerHTML = '<div class="hint" style="padding:12px">No files.</div>';
+      return;
+    }}
+    for (const child of tree.children) {{
+      const el = renderTreeNode(child, "", 0);
+      if (el) treeEl.appendChild(el);
     }}
   }}
 
@@ -758,14 +856,14 @@ def index() -> str:
       await doSearch(searchEl.value);
       return;
     }}
-    renderFileList(flattenFiles(TREE));
+    renderFileList(TREE);
   }}
 
   async function loadFile(path) {{
     CURRENT_PATH = path;
     updateCurrentFileField(path);
     if (!isSearchActive()) {{
-      renderFileList(flattenFiles(TREE));
+      renderFileList(TREE);
     }}
 
     const res = await fetch('/api/file?path=' + encodeURIComponent(path));
@@ -982,6 +1080,7 @@ def index() -> str:
 
   // Initial boot
   (async () => {{
+    loadExpandedDirs();
     updateCurrentFileField("");
     const savedRoot = localStorage.getItem('docs_root');
     if (savedRoot) {{
